@@ -120,6 +120,9 @@ class Poly(Shape):
             return collection_to_mls(ifill)
         except:
             return MultiLineString([ifill])
+        
+    def get_random_point(self):
+        return get_random_point_in_polygon(self.p)
 
 
 def centered_box(point, width, height):
@@ -602,84 +605,8 @@ def circle_growth(poly, rads, obj_func, max_additions=np.inf, progress_bar=True)
 
 
 # Cell
-class PerlinGrid(object):
-
-    def __init__(self, poly, xstep=0.1, ystep=0.1, lod=4, falloff=None, noiseSeed=71, noise_scale=0.001):
-
-        self.p = poly
-        (self.xbins, self.ybins), _ = overlay_grid(poly, xstep, ystep)
-        self.gxs, self.gys = np.meshgrid(self.xbins, self.ybins)
-
-        self.vsk = vsketch.Vsketch()
-        self.lod = lod
-        self.falloff = falloff
-        self.noiseSeed = noiseSeed
-        self.noise_scale = noise_scale
-        self.z = self.make_noisegrid()
-        self.a = np.interp(self.z, [0, 1], [0, np.pi*2])
 
 
-    def make_noisegrid(self):
-        self.vsk.noiseSeed(self.noiseSeed)
-        self.vsk.noiseDetail(lod=self.lod, falloff=self.falloff)
-        zs = []
-        for x,y in zip(self.gxs.ravel(), self.gys.ravel()):
-            x = x * self.noise_scale
-            y = y * self.noise_scale
-            zs.append(self.vsk.noise(x=x, y=y))
-        return np.array(zs).reshape(self.gxs.shape)
-
-
-# Cell
-class Particle(object):
-
-    def __init__(self, pos, grid, stepsize=1):
-        self.pos = Point(pos)
-        self.grid = grid
-        self.stepsize = stepsize
-        self.n_step = 0
-        self.pts = [self.pos]
-        self.in_bounds = True
-
-    @property
-    def x(self):
-        return self.pos.x
-    
-    @property
-    def y(self):
-        return self.pos.y
-    
-    @property
-    def xy(self):
-        return np.array([self.x, self.y])
-
-    @property
-    def line(self):
-        return LineString(self.pts)
-    
-    def get_closest_bins(self):
-        self.xind = np.argmin(abs(self.grid.xbins-self.x))
-        self.yind = np.argmin(abs(self.grid.ybins-self.y))
-
-    def get_angle(self):
-        self.a = self.grid.a[self.yind, self.xind]
-
-    def check_if_in_bounds(self):
-        self.in_bounds = self.grid.p.contains(self.pos)
-
-    def calc_step(self):
-        self.get_closest_bins()
-        self.get_angle()
-        self.dx = np.cos(self.a) * self.stepsize
-        self.dy = np.sin(self.a) * self.stepsize
-
-
-    def step(self):
-        self.check_if_in_bounds()
-        if self.in_bounds:
-            self.calc_step()
-            self.pos = sa.translate(self.pos, xoff=self.dx, yoff=self.dy)
-            self.pts.append(self.pos)
 
 
 
@@ -1425,3 +1352,48 @@ def recursive_split_frac_buffer(poly, split_func=random_line_subdivide, p_contin
         return split_polys
     except:
         return [poly]
+    
+    
+class BezierCurve(object):
+    
+    def __init__(
+        self,
+        nodes=None,
+        degree=None,
+        n_eval_points=100,
+    ):
+        nodes = nodes.transpose(np.argsort(np.array(nodes.shape)-2))  # hacky, to get in right orientation
+        self._nodes = nodes
+        self._degree = degree
+        self.n_eval_points = n_eval_points
+        
+    @property
+    def degree(self):
+        if self._degree is None:
+            self._degree = self.nodes.shape[1]-1
+        return self._degree
+    
+    @property
+    def nodes(self):
+        return self._nodes
+    
+    @property
+    def _fortran_nodes(self):
+        return np.asfortranarray(self.nodes)
+    
+    @property
+    def _curve(self):
+        return bezier.Curve(self._fortran_nodes, self.degree)
+    
+    @property
+    def eval_points(self):
+        return np.linspace(0, 1, self.n_eval_points)
+    
+    @property
+    def evaluated_curve(self):
+        x, y = self._curve.evaluate_multi(self.eval_points)
+        return np.stack([x, y]).T
+    
+    @property
+    def linestring(self):
+        return LineString(self.evaluated_curve)
